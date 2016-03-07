@@ -42,16 +42,26 @@ public class DiskCacheProducer implements Producer<EncodedImage> {
   private final BufferedDiskCache mSmallImageBufferedDiskCache;
   private final CacheKeyFactory mCacheKeyFactory;
   private final Producer<EncodedImage> mInputProducer;
+  private final boolean mIsWriteDiskSync;
 
+	public DiskCacheProducer(
+			BufferedDiskCache defaultBufferedDiskCache,
+			BufferedDiskCache smallImageBufferedDiskCache,
+			CacheKeyFactory cacheKeyFactory,
+			Producer<EncodedImage> inputProducer) {
+		this(defaultBufferedDiskCache, smallImageBufferedDiskCache, cacheKeyFactory, inputProducer, false);
+	}
   public DiskCacheProducer(
       BufferedDiskCache defaultBufferedDiskCache,
       BufferedDiskCache smallImageBufferedDiskCache,
       CacheKeyFactory cacheKeyFactory,
-      Producer<EncodedImage> inputProducer) {
+      Producer<EncodedImage> inputProducer,
+      boolean isWriteDiskSync) {
     mDefaultBufferedDiskCache = defaultBufferedDiskCache;
     mSmallImageBufferedDiskCache = smallImageBufferedDiskCache;
     mCacheKeyFactory = cacheKeyFactory;
     mInputProducer = inputProducer;
+    mIsWriteDiskSync = isWriteDiskSync;
   }
 
   public void produceResults(
@@ -177,7 +187,7 @@ public class DiskCacheProducer implements Producer<EncodedImage> {
     @Override
     public void onNewResultImpl(EncodedImage newResult, boolean isLast) {
       if (newResult != null && isLast) {
-        mCache.put(mCacheKey, newResult);
+        mCache.put(mCacheKey, newResult, mIsWriteDiskSync);
       }
       getConsumer().onNewResult(newResult, isLast);
     }

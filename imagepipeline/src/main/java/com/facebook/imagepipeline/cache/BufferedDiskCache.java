@@ -188,46 +188,61 @@ public class BufferedDiskCache {
     }
   }
 
+  public void put(
+	  final CacheKey key,
+	  EncodedImage encodedImage) {
+	  put(key, encodedImage, false);
+  }
   /**
    * Associates encodedImage with given key in disk cache. Disk write is performed on background
    * thread, so the caller of this method is not blocked
    */
   public void put(
       final CacheKey key,
-      EncodedImage encodedImage) {
+      EncodedImage encodedImage,
+      boolean sync) {
     Preconditions.checkNotNull(key);
     Preconditions.checkArgument(EncodedImage.isValid(encodedImage));
 
-    // Store encodedImage in staging area
-    mStagingArea.put(key, encodedImage);
+    if (sync) {
+      writeToDiskCache(key, encodedImage);
+    }
+    else
+    {
+      // Store encodedImage in staging area
+      mStagingArea.put(key, encodedImage);
 
-    // Write to disk cache. This will be executed on background thread, so increment the ref count.
-    // When this write completes (with success/failure), then we will bump down the ref count
-    // again.
-    final EncodedImage finalEncodedImage = EncodedImage.cloneOrNull(encodedImage);
-    try {
-      mWriteExecutor.execute(
-          new Runnable() {
-            @Override
-            public void run() {
-              try {
-                writeToDiskCache(key, finalEncodedImage);
-              } finally {
-                mStagingArea.remove(key, finalEncodedImage);
-                EncodedImage.closeSafely(finalEncodedImage);
-              }
+      // Write to disk cache. This will be executed on background thread, so increment the ref count.
+      // When this write completes (with success/failure), then we will bump down the ref count
+      // again.
+      final EncodedImage finalEncodedImage = EncodedImage.cloneOrNull(encodedImage);
+      try
+      {
+        mWriteExecutor.execute(new Runnable()
+        {
+          @Override
+          public void run()
+          {
+            try
+            {
+              writeToDiskCache(key, finalEncodedImage);
             }
-          });
-    } catch (Exception exception) {
-      // We failed to enqueue cache write. Log failure and decrement ref count
-      // TODO: 3697790
-      FLog.w(
-          TAG,
-          exception,
-          "Failed to schedule disk-cache write for %s",
-          key.toString());
-      mStagingArea.remove(key, encodedImage);
-      EncodedImage.closeSafely(finalEncodedImage);
+            finally
+            {
+              mStagingArea.remove(key, finalEncodedImage);
+              EncodedImage.closeSafely(finalEncodedImage);
+            }
+          }
+        });
+      }
+      catch (Exception exception)
+      {
+        // We failed to enqueue cache write. Log failure and decrement ref count
+        // TODO: 3697790
+        FLog.w(TAG, exception, "Failed to schedule disk-cache write for %s", key.toString());
+        mStagingArea.remove(key, encodedImage);
+        EncodedImage.closeSafely(finalEncodedImage);
+      }
     }
   }
 

@@ -37,6 +37,7 @@ import com.facebook.imagepipeline.producers.DecodeProducer;
 import com.facebook.imagepipeline.producers.DiskCacheProducer;
 import com.facebook.imagepipeline.producers.EncodedCacheKeyMultiplexProducer;
 import com.facebook.imagepipeline.producers.EncodedMemoryCacheProducer;
+import com.facebook.imagepipeline.producers.ImageFileFetchProducer;
 import com.facebook.imagepipeline.producers.LocalAssetFetchProducer;
 import com.facebook.imagepipeline.producers.LocalContentUriFetchProducer;
 import com.facebook.imagepipeline.producers.LocalExifThumbnailProducer;
@@ -128,6 +129,9 @@ public class ProducerFactory {
       Producer<EncodedImage> inputProducer) {
     return new AddImageTransformMetaDataProducer(inputProducer);
   }
+  public static ImageFileFetchProducer newImageFileFetchProducer(final Producer<EncodedImage> pInputProducer) {
+    return new ImageFileFetchProducer(pInputProducer);
+  }
 
   public BitmapMemoryCacheGetProducer newBitmapMemoryCacheGetProducer(
       Producer<CloseableReference<CloseableImage>> inputProducer) {
@@ -166,12 +170,14 @@ public class ProducerFactory {
   }
 
   public DiskCacheProducer newDiskCacheProducer(
-      Producer<EncodedImage> inputProducer) {
+      Producer<EncodedImage> inputProducer,
+      boolean isWriteDiskSync) {
     return new DiskCacheProducer(
         mDefaultBufferedDiskCache,
         mSmallImageBufferedDiskCache,
         mCacheKeyFactory,
-        inputProducer);
+        inputProducer,
+        isWriteDiskSync);
   }
 
   public EncodedCacheKeyMultiplexProducer newEncodedCacheKeyMultiplexProducer(

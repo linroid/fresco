@@ -11,6 +11,7 @@ package com.facebook.imagepipeline.core;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.io.File;
 import java.lang.Exception;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
@@ -288,6 +289,33 @@ public class ImagePipeline {
       return DataSources.immediateFailedDataSource(exception);
     }
   }
+  public DataSource<File> fetchImageFile(
+      ImageRequest imageRequest,
+      Object callerContext) {
+      Preconditions.checkNotNull(imageRequest.getSourceUri());
+      try {
+        Producer<File> producerSequence =
+                mProducerSequenceFactory.getImageFileProducerSequence(imageRequest);
+        // The resize options are used to determine whether images are going to be downsampled during
+        // decode or not. For the case where the image has to be downsampled and it's a local image it
+        // will be kept as a FileInputStream until decoding instead of reading it in memory. Since
+        // this method returns an encoded image, it should always be read into memory. Therefore, the
+        // resize options are ignored to avoid treating the image as if it was to be downsampled
+        // during decode.
+        if (imageRequest.getResizeOptions() != null) {
+          imageRequest = ImageRequestBuilder.fromRequest(imageRequest)
+                  .setResizeOptions(null)
+                  .build();
+        }
+        return submitImageFileFetchRequest(
+                producerSequence,
+                imageRequest,
+                ImageRequest.RequestLevel.FULL_FETCH,
+                callerContext);
+      } catch (Exception exception) {
+        return DataSources.immediateFailedDataSource(exception);
+      }
+  }
 
   /**
    * Removes all images with the specified {@link Uri} from memory cache.
@@ -500,7 +528,33 @@ public class ImagePipeline {
       return DataSources.immediateFailedDataSource(exception);
     }
   }
-
+  private DataSource<File> submitImageFileFetchRequest(
+          Producer<File> producerSequence,
+          ImageRequest imageRequest,
+          ImageRequest.RequestLevel lowestPermittedRequestLevelOnSubmit,
+          Object callerContext) {
+    try {
+      ImageRequest.RequestLevel lowestPermittedRequestLevel =
+              ImageRequest.RequestLevel.getMax(
+                      imageRequest.getLowestPermittedRequestLevel(),
+                      lowestPermittedRequestLevelOnSubmit);
+      SettableProducerContext settableProducerContext = new SettableProducerContext(
+              imageRequest,
+              generateUniqueFutureId(),
+              mRequestListener,
+              callerContext,
+              lowestPermittedRequestLevel,
+        /* isPrefetch */ true,
+        /* isIntermediateResultExpected */ false,
+              Priority.LOW);
+      return ProducerToDataSourceAdapter.create(
+              producerSequence,
+              settableProducerContext,
+              mRequestListener);
+    } catch (Exception exception) {
+      return DataSources.immediateFailedDataSource(exception);
+    }
+  }
   private Predicate<CacheKey> predicateForUri(Uri uri) {
     final String cacheKeySourceString = mCacheKeyFactory.getCacheKeySourceUri(uri).toString();
     return new Predicate<CacheKey>() {

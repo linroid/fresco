@@ -9,6 +9,7 @@
 
 package com.facebook.imagepipeline.core;
 
+import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -60,6 +61,7 @@ public class ProducerSequenceFactory {
   @VisibleForTesting Producer<EncodedImage> mBackgroundNetworkFetchToEncodedMemorySequence;
   @VisibleForTesting Producer<CloseableReference<PooledByteBuffer>> mEncodedImageProducerSequence;
   @VisibleForTesting Producer<Void> mNetworkFetchToEncodedMemoryPrefetchSequence;
+  @VisibleForTesting Producer<File> mImageFileFetchSequence;
   private Producer<EncodedImage> mCommonNetworkFetchToEncodedMemorySequence;
   @VisibleForTesting Producer<CloseableReference<CloseableImage>> mLocalImageFileFetchSequence;
   @VisibleForTesting Producer<CloseableReference<CloseableImage>> mLocalVideoFileFetchSequence;
@@ -103,7 +105,7 @@ public class ProducerSequenceFactory {
     synchronized (this) {
       if (mEncodedImageProducerSequence == null) {
         mEncodedImageProducerSequence = new RemoveImageTransformMetaDataProducer(
-            getBackgroundNetworkFetchToEncodedMemorySequence());
+            getBackgroundNetworkFetchToEncodedMemorySequence(false));
       }
     }
     return mEncodedImageProducerSequence;
@@ -123,6 +125,18 @@ public class ProducerSequenceFactory {
     return getNetworkFetchToEncodedMemoryPrefetchSequence();
   }
 
+  public synchronized Producer<File> getImageFileProducerSequence(ImageRequest imageRequest) {
+    validateEncodedImageRequest(imageRequest);
+	  if (mImageFileFetchSequence == null) {
+		  Producer<EncodedImage> inputProducer =
+				  mProducerFactory.newDiskCacheProducer(mProducerFactory.newNetworkFetchProducer(mNetworkFetcher), true);
+		  mImageFileFetchSequence =
+				  ProducerFactory.newImageFileFetchProducer(inputProducer);
+
+	  }
+	  return mImageFileFetchSequence;
+  }
+
   private static void validateEncodedImageRequest(ImageRequest imageRequest) {
     Preconditions.checkNotNull(imageRequest);
     Preconditions.checkArgument(UriUtil.isNetworkUri(imageRequest.getSourceUri()));
@@ -140,7 +154,7 @@ public class ProducerSequenceFactory {
   public Producer<CloseableReference<CloseableImage>> getDecodedImageProducerSequence(
       ImageRequest imageRequest) {
     Producer<CloseableReference<CloseableImage>> pipelineSequence =
-        getBasicDecodedImageSequence(imageRequest);
+        getBasicDecodedImageSequence(imageRequest, false);
     if (imageRequest.getPostprocessor() != null) {
       return getPostprocessorSequence(pipelineSequence);
     } else {
@@ -156,17 +170,18 @@ public class ProducerSequenceFactory {
    */
   public Producer<Void> getDecodedImagePrefetchProducerSequence(
       ImageRequest imageRequest) {
-    return getDecodedImagePrefetchSequence(getBasicDecodedImageSequence(imageRequest));
+    return getDecodedImagePrefetchSequence(getBasicDecodedImageSequence(imageRequest, false));
   }
 
   private Producer<CloseableReference<CloseableImage>> getBasicDecodedImageSequence(
-      ImageRequest imageRequest) {
+      ImageRequest imageRequest,
+      boolean isWriteDiskSync) {
     Preconditions.checkNotNull(imageRequest);
 
     Uri uri = imageRequest.getSourceUri();
     Preconditions.checkNotNull(uri, "Uri is null.");
     if (UriUtil.isNetworkUri(uri)) {
-      return getNetworkFetchSequence();
+      return getNetworkFetchSequence(isWriteDiskSync);
     } else if (UriUtil.isLocalFileUri(uri)) {
       if (MediaUtils.isVideo(MediaUtils.extractMime(uri.getPath()))) {
         return getLocalVideoFileFetchSequence();
@@ -195,10 +210,11 @@ public class ProducerSequenceFactory {
    * background thread hand-off -> multiplex -> bitmap cache -> decode -> multiplex ->
    * encoded cache -> disk cache -> (webp transcode) -> network fetch.
    */
-  private synchronized Producer<CloseableReference<CloseableImage>> getNetworkFetchSequence() {
+  private synchronized Producer<CloseableReference<CloseableImage>> getNetworkFetchSequence(
+      boolean isWriteDiskSync) {
     if (mNetworkFetchSequence == null) {
       mNetworkFetchSequence =
-          newBitmapCacheGetToDecodeSequence(getCommonNetworkFetchToEncodedMemorySequence());
+          newBitmapCacheGetToDecodeSequence(getCommonNetworkFetchToEncodedMemorySequence(isWriteDiskSync));
     }
     return mNetworkFetchSequence;
   }
@@ -208,12 +224,12 @@ public class ProducerSequenceFactory {
    * disk cache -> (webp transcode) -> network fetch.
    */
   private synchronized Producer<EncodedImage>
-      getBackgroundNetworkFetchToEncodedMemorySequence() {
+      getBackgroundNetworkFetchToEncodedMemorySequence(boolean isWriteDiskSync) {
     if (mBackgroundNetworkFetchToEncodedMemorySequence == null) {
       // Use hand-off producer to ensure that we don't do any unnecessary work on the UI thread.
       mBackgroundNetworkFetchToEncodedMemorySequence =
           mProducerFactory.newBackgroundThreadHandoffProducer(
-                  getCommonNetworkFetchToEncodedMemorySequence(),
+                  getCommonNetworkFetchToEncodedMemorySequence(isWriteDiskSync),
                   mThreadHandoffProducerQueue);
     }
     return mBackgroundNetworkFetchToEncodedMemorySequence;
@@ -227,7 +243,7 @@ public class ProducerSequenceFactory {
     if (mNetworkFetchToEncodedMemoryPrefetchSequence == null) {
       mNetworkFetchToEncodedMemoryPrefetchSequence =
           mProducerFactory.newSwallowResultProducer(
-                  getBackgroundNetworkFetchToEncodedMemorySequence());
+                  getBackgroundNetworkFetchToEncodedMemorySequence(false));
     }
     return mNetworkFetchToEncodedMemoryPrefetchSequence;
   }
@@ -235,11 +251,12 @@ public class ProducerSequenceFactory {
   /**
    * multiplex -> encoded cache -> disk cache -> (webp transcode) -> network fetch.
    */
-  private synchronized Producer<EncodedImage> getCommonNetworkFetchToEncodedMemorySequence() {
+  private synchronized Producer<EncodedImage> getCommonNetworkFetchToEncodedMemorySequence(
+      boolean isWriteDiskSync) {
     if (mCommonNetworkFetchToEncodedMemorySequence == null) {
       Producer<EncodedImage> inputProducer =
           newEncodedCacheMultiplexToTranscodeSequence(
-              mProducerFactory.newNetworkFetchProducer(mNetworkFetcher));
+              mProducerFactory.newNetworkFetchProducer(mNetworkFetcher), isWriteDiskSync);
       mCommonNetworkFetchToEncodedMemorySequence =
           ProducerFactory.newAddImageTransformMetaDataProducer(inputProducer);
 
@@ -369,7 +386,7 @@ public class ProducerSequenceFactory {
    */
   private Producer<CloseableReference<CloseableImage>> newBitmapCacheGetToLocalTransformSequence(
       Producer<EncodedImage> inputProducer) {
-    inputProducer = newEncodedCacheMultiplexToTranscodeSequence(inputProducer);
+    inputProducer = newEncodedCacheMultiplexToTranscodeSequence(inputProducer, false);
     Producer<EncodedImage> inputProducerAfterDecode =
         newLocalTransformationsSequence(inputProducer);
     return newBitmapCacheGetToDecodeSequence(inputProducerAfterDecode);
@@ -392,11 +409,11 @@ public class ProducerSequenceFactory {
    * @return encoded cache multiplex to webp transcode sequence
    */
   private Producer<EncodedImage> newEncodedCacheMultiplexToTranscodeSequence(
-          Producer<EncodedImage> inputProducer) {
+          Producer<EncodedImage> inputProducer, boolean isWriteDiskSync) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR2 && !mWebpSupportEnabled) {
       inputProducer = mProducerFactory.newWebpTranscodeProducer(inputProducer);
     }
-    inputProducer = mProducerFactory.newDiskCacheProducer(inputProducer);
+    inputProducer = mProducerFactory.newDiskCacheProducer(inputProducer, isWriteDiskSync);
     EncodedMemoryCacheProducer encodedMemoryCacheProducer =
         mProducerFactory.newEncodedMemoryCacheProducer(inputProducer);
     return mProducerFactory.newEncodedCacheKeyMultiplexProducer(encodedMemoryCacheProducer);
